@@ -5,6 +5,7 @@ Cairo surface creators.
 
 import copy
 import io
+import warnings
 
 import cairocffi as cairo
 
@@ -77,6 +78,25 @@ PATH_TAGS = frozenset((
 INVISIBLE_TAGS = frozenset((
     'clipPath', 'filter', 'linearGradient', 'marker', 'mask', 'pattern',
     'radialGradient', 'symbol'))
+
+SUPPORTED_VECTOR_EFFECTS = frozenset(('non-scaling-stroke',))
+
+
+def vector_effects(node):
+    """Parse node's ``vector-effect`` property.
+
+    Return the set of supported effects, and warn about unsupported ones.
+
+    """
+    effects = set()
+    for value in node.get('vector-effect', '').lower().split():
+        if value == 'none':
+            continue
+        if value in SUPPORTED_VECTOR_EFFECTS:
+            effects.add(value)
+        else:
+            warnings.warn(f'Unsupported vector-effect value: {value}')
+    return effects
 
 
 class Surface(object):
@@ -220,6 +240,9 @@ class Surface(object):
         # Initial, non-rounded dimensions
         self.set_context_size(width, height, viewbox, tree)
         self.context.move_to(0, 0)
+        # Matrix of the host coordinate system (the furthest ancestral SVG
+        # viewport), used to draw vector-effect="non-scaling-stroke" strokes
+        self.host_matrix = self.context.get_matrix()
 
         if background_color:
             self.context.set_source_rgba(*color(background_color))
@@ -463,6 +486,25 @@ class Surface(object):
                     self, node, paint_source, stroke_opacity):
                 self.context.set_source_rgba(
                     *self.map_color(paint_color, stroke_opacity))
+            if 'non-scaling-stroke' in vector_effects(node):
+                # Compute the stroke outline in the host coordinate system
+                # instead of the user coordinate system: transform the path
+                # into the host space and stroke it there, so that the
+                # stroke width (and dashes, caps and joins) doesn't depend
+                # on the element's transformations. The stroke source has
+                # been set above and is locked to the user space.
+                matrix = (
+                    self.context.get_matrix() * self.host_matrix.inverted())
+                path = [
+                    (verb, tuple(
+                        coordinate
+                        for index in range(0, len(points), 2)
+                        for coordinate in matrix.transform_point(
+                            points[index], points[index + 1])))
+                    for verb, points in self.context.copy_path()]
+                self.context.new_path()
+                self.context.set_matrix(self.host_matrix)
+                self.context.append_path(path)
             self.context.stroke()
             self.context.restore()
         elif not visible:

@@ -3,6 +3,16 @@
 ======
 
 
+Version 3.0 (unreleased)
+========================
+
+* Support vector-effect="non-scaling-stroke": the stroke outline (width,
+  dashes, caps and joins) of shapes, paths and text is computed in the host
+  viewport coordinate system, so it doesn't depend on the element's
+  transformations. Unsupported vector-effect values emit a warning and are
+  ignored.
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

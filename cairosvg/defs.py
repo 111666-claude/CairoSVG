@@ -369,6 +369,11 @@ def use(surface, node):
         if 'width' in node and 'height' in node:
             tree['width'], tree['height'] = node['width'], node['height']
 
+    # vector-effect is not inherited, but applies to 'use' elements: the
+    # effect set on the 'use' element applies to the referenced content
+    if 'vector-effect' in node and 'vector-effect' not in tree:
+        tree['vector-effect'] = node['vector-effect']
+
     surface.draw(tree)
     node.get('fill', None)
     node.get('stroke', None)
