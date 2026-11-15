@@ -7,6 +7,7 @@ This module handles clips, gradients, masks, patterns and external nodes.
 
 from .bounding_box import calculate_bounding_box, is_non_empty_bounding_box
 from .features import match_features
+from .filters import filter_uses_color_matrix
 from .helpers import paint, size, transform
 from .parser import Tree
 from .shapes import rect
@@ -273,6 +274,10 @@ def prepare_filter(surface, node, name):
 
     if name in surface.filters:
         filter_node = surface.filters[name]
+        if filter_uses_color_matrix(surface, name):
+            # The whole filter is evaluated by the raster pipeline in
+            # surface.py, including feOffset primitives.
+            return
         for child in filter_node.children:
             # Offset
             if child.tag == 'feOffset':
@@ -294,6 +299,9 @@ def apply_filter_before_painting(surface, node, name):
 
     if name in surface.filters:
         filter_node = surface.filters[name]
+        if filter_uses_color_matrix(surface, name):
+            # feBlend is handled by the raster filter pipeline.
+            return
         for child in filter_node.children:
             # Blend
             if child.tag == 'feBlend':
@@ -308,6 +316,9 @@ def apply_filter_after_painting(surface, node, name):
 
     if name in surface.filters:
         filter_node = surface.filters[name]
+        if filter_uses_color_matrix(surface, name):
+            # feFlood is handled by the raster filter pipeline.
+            return
         for child in filter_node.children:
             # Flood
             if child.tag == 'feFlood':

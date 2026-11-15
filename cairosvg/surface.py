@@ -13,6 +13,7 @@ from .defs import (
     apply_filter_after_painting, apply_filter_before_painting, clip_path,
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
+from .filters import apply_color_matrix_filter, filter_uses_color_matrix
 from .helpers import (
     UNITS, PointError, clip_rect, node_format, normalize, paint,
     preserve_ratio, size, transform)
@@ -414,7 +415,9 @@ class Surface(object):
         # Get stroke and fill opacity
         stroke_opacity = float(node.get('stroke-opacity', 1))
         fill_opacity = float(node.get('fill-opacity', 1))
-        if opacity < 1 and not node.children:
+        if opacity < 1 and not node.children and not filter_:
+            # When a filter is present the group opacity is applied once,
+            # after the filter has run; do not bake it into the source.
             stroke_opacity *= opacity
             fill_opacity *= opacity
 
@@ -478,14 +481,26 @@ class Surface(object):
 
         # Apply filter, mask and opacity
         if filter_ or mask or (opacity < 1 and node.children):
-            self.context.pop_group_to_source()
-            if filter_:
-                apply_filter_before_painting(self, node, filter_)
+            raster_filter = (
+                filter_ and filter_uses_color_matrix(self, filter_))
+            if raster_filter:
+                # Pixel-based filter primitives are evaluated on an image
+                # surface and returned as a device-aligned pattern.
+                filter_pattern = apply_color_matrix_filter(
+                    self, node, filter_)
+                if filter_pattern is None:
+                    self.context.pop_group_to_source()
+                else:
+                    self.context.set_source(filter_pattern)
+            else:
+                self.context.pop_group_to_source()
+                if filter_:
+                    apply_filter_before_painting(self, node, filter_)
             if mask in self.masks:
                 paint_mask(self, node, mask, opacity)
             else:
                 self.context.paint_with_alpha(opacity)
-            if filter_:
+            if filter_ and not raster_filter:
                 apply_filter_after_painting(self, node, filter_)
 
         # Clean cursor's position after 'text' tags

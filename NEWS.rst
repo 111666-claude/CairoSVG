@@ -3,6 +3,17 @@
 ======
 
 
+Next version
+============
+
+* Support the ``feColorMatrix`` SVG filter primitive, including its
+  ``matrix``, ``saturate``, ``hueRotate`` and ``luminanceToAlpha`` types.
+  Pixel-based primitives are evaluated on a raster surface and can be chained
+  with the existing ``feOffset``, ``feFlood`` and ``feBlend`` primitives,
+  honoring ``SourceGraphic``, ``SourceAlpha``, named ``result`` inputs and
+  filter / primitive regions.
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 
