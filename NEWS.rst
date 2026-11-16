@@ -3,6 +3,19 @@
 ======
 
 
+Next version
+============
+
+* Add basic support of the ``feComposite`` filter primitive, with the
+  ``over``, ``in``, ``out``, ``atop`` and ``xor`` operators. Filter
+  primitives are now run as a pipeline keeping intermediate results:
+  ``SourceGraphic``, ``SourceAlpha``, the previous result and named
+  ``result`` references can be used as ``in`` and ``in2`` inputs, including
+  in chains with ``feOffset``, ``feFlood`` and ``feBlend``. Missing
+  references, result cycles and unsupported operators or primitives raise an
+  error instead of being silently ignored.
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 
