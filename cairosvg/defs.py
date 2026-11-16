@@ -5,13 +5,20 @@ This module handles clips, gradients, masks, patterns and external nodes.
 
 """
 
+import math
+from collections import deque
+
 from .bounding_box import calculate_bounding_box, is_non_empty_bounding_box
 from .features import match_features
-from .helpers import paint, size, transform
+from .helpers import normalize, paint, size, transform
 from .parser import Tree
 from .shapes import rect
 from .surface import cairo
 from .url import parse_url
+
+# Maximum feMorphology radius in device pixels. Larger windows are rejected
+# instead of being silently ignored or making rendering unreasonably slow.
+MAX_MORPHOLOGY_RADIUS = 4096
 
 BLEND_OPERATORS = {
     'darken': cairo.OPERATOR_DARKEN,
@@ -299,6 +306,130 @@ def apply_filter_before_painting(surface, node, name):
             if child.tag == 'feBlend':
                 surface.context.set_operator(BLEND_OPERATORS.get(
                     child.get('mode', 'normal'), BLEND_OPERATORS['normal']))
+            # Morphology
+            elif child.tag == 'feMorphology':
+                apply_morphology(surface, node, filter_node, child)
+
+
+def apply_morphology(surface, node, filter_node, child):
+    """Apply an feMorphology primitive to the painted group.
+
+    The group holding the painted node is eroded or dilated in place, before
+    it is composited on the target surface.
+
+    """
+    operator = child.get('operator', 'erode')
+    if operator not in ('erode', 'dilate'):
+        raise ValueError(
+            f'Unknown feMorphology operator: {operator!r}')
+
+    # Parse radius: one or two numbers (x, then optional y)
+    radius_string = child.get('radius', '0')
+    tokens = normalize(radius_string).split(' ')
+    if len(tokens) > 2:
+        raise ValueError(
+            f'Invalid feMorphology radius: {radius_string!r}')
+    try:
+        radii = [float(token) for token in tokens]
+    except ValueError:
+        raise ValueError(
+            f'Invalid feMorphology radius: {radius_string!r}') from None
+    radius_x, radius_y = (radii * 2)[:2]
+    for radius in (radius_x, radius_y):
+        if not math.isfinite(radius):
+            raise ValueError(
+                f'feMorphology radius must be finite, got {radius!r}')
+        if radius < 0:
+            raise ValueError(
+                f'feMorphology radius must be non-negative, got {radius!r}')
+
+    # Radii are lengths in the current user coordinate system
+    if filter_node.get('primitiveUnits') == 'objectBoundingBox':
+        radius_x *= size(surface, node.get('width'), 'x')
+        radius_y *= size(surface, node.get('height'), 'y')
+
+    # The group pixels are in device units: convert radii accordingly
+    radius_x, radius_y = surface.context.user_to_device_distance(
+        radius_x, radius_y)
+    radius_x, radius_y = abs(radius_x), abs(radius_y)
+    if max(radius_x, radius_y) > MAX_MORPHOLOGY_RADIUS:
+        raise ValueError(
+            f'feMorphology radius is too large: '
+            f'{max(radius_x, radius_y)} device pixels')
+    radius_x = int(round(radius_x))
+    radius_y = int(round(radius_y))
+    if radius_x == 0 and radius_y == 0:
+        # Zero radius: input is left unchanged
+        return
+
+    # The painted group is the current source pattern
+    pattern = surface.context.get_source()
+    if not isinstance(pattern, cairo.SurfacePattern):
+        return
+    group = pattern.get_surface()
+    if not isinstance(group, cairo.ImageSurface):
+        # Pixel filters can only be applied to raster groups
+        return
+    if group.get_format() != cairo.FORMAT_ARGB32:
+        return
+
+    width = group.get_width()
+    height = group.get_height()
+    stride = group.get_stride()
+    group.flush()
+    data = bytearray(group.get_data())
+    _morphology(
+        data, width, height, stride, radius_x, radius_y,
+        dilate=operator == 'dilate')
+    group.get_data()[:] = data
+    group.mark_dirty()
+
+
+def _morphology(data, width, height, stride, radius_x, radius_y, dilate):
+    """Erode or dilate premultiplied ARGB32 pixels in place.
+
+    The rectangular structuring element is separable: a horizontal pass with
+    ``radius_x`` followed by a vertical pass with ``radius_y``. Taking
+    per-channel minima (erode) or maxima (dilate) keeps premultiplied values
+    valid, as color channels stay bounded by the alpha channel.
+
+    """
+    if radius_x:
+        for y in range(height):
+            row = y * stride
+            for channel in range(4):
+                start = row + channel
+                data[start:start + 4 * width:4] = _sliding_extremum(
+                    data[start:start + 4 * width:4], radius_x, dilate)
+    if radius_y:
+        for x in range(width):
+            for channel in range(4):
+                start = 4 * x + channel
+                data[start::stride] = _sliding_extremum(
+                    data[start::stride], radius_y, dilate)
+
+
+def _sliding_extremum(line, radius, maximum):
+    """Return min/max of ``line`` over a centered window of ``radius``."""
+    length = len(line)
+    result = bytearray(length)
+    candidates = deque()  # indices with monotonically increasing values
+    for index in range(min(radius + 1, length)):
+        while candidates and (
+                (line[candidates[-1]] <= line[index]) == maximum):
+            candidates.pop()
+        candidates.append(index)
+    for index in range(length):
+        result[index] = line[candidates[0]]
+        if candidates[0] <= index - radius:
+            candidates.popleft()
+        new = index + radius + 1
+        if new < length:
+            while candidates and (
+                    (line[candidates[-1]] <= line[new]) == maximum):
+                candidates.pop()
+            candidates.append(new)
+    return result
 
 
 def apply_filter_after_painting(surface, node, name):

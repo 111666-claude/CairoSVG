@@ -3,6 +3,12 @@
 ======
 
 
+Unreleased
+==========
+
+* Support the feMorphology filter primitive (erode and dilate operators)
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 
