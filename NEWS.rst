@@ -3,6 +3,16 @@
 ======
 
 
+Next version
+============
+
+* Support the ``feDisplacementMap`` filter primitive, with bilinear
+  sampling, edge clamping, filter regions and ``SourceGraphic``/
+  ``SourceAlpha`` inputs driven by an ``feImage`` displacement map.
+  Invalid primitives (missing inputs, bad channels, non-finite or huge
+  scale) raise an explicit error instead of being ignored.
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

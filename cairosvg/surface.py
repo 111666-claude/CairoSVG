@@ -13,6 +13,7 @@ from .defs import (
     apply_filter_after_painting, apply_filter_before_painting, clip_path,
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
+from .filters import apply_raster_filters
 from .helpers import (
     UNITS, PointError, clip_rect, node_format, normalize, paint,
     preserve_ratio, size, transform)
@@ -478,6 +479,13 @@ class Surface(object):
 
         # Apply filter, mask and opacity
         if filter_ or mask or (opacity < 1 and node.children):
+            if filter_:
+                # Raster filters run while the pushed group is still the
+                # active target: they read a snapshot of the group content
+                # and write the transformed pixels back into that same
+                # surface, which pop_group then composites onto the parent.
+                apply_raster_filters(
+                    self, node, self.filters[filter_])
             self.context.pop_group_to_source()
             if filter_:
                 apply_filter_before_painting(self, node, filter_)

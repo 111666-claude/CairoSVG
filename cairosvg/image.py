@@ -16,6 +16,7 @@ from .url import parse_url
 IMAGE_RENDERING = {
     'optimizeQuality': cairo.FILTER_BEST,
     'optimizeSpeed': cairo.FILTER_FAST,
+    'pixelated': cairo.FILTER_NEAREST,
 }
 
 

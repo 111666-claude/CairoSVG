@@ -7,6 +7,7 @@ This module handles clips, gradients, masks, patterns and external nodes.
 
 from .bounding_box import calculate_bounding_box, is_non_empty_bounding_box
 from .features import match_features
+from .filters import apply_displacement_map, validate_displacement_map
 from .helpers import paint, size, transform
 from .parser import Tree
 from .shapes import rect
@@ -68,6 +69,10 @@ def parse_def(surface, node):
             'image'):
         if def_type in node.tag.lower() and 'id' in node:
             getattr(surface, f'{def_type}s')[node['id']] = node
+    # feImage primitives are referenced by their "result" attribute from
+    # other filter primitives such as feDisplacementMap.
+    if node.tag == 'feImage' and node.get('result'):
+        surface.images[node['result']] = node
 
 
 def gradient_or_pattern(surface, node, name, opacity):
@@ -286,6 +291,12 @@ def prepare_filter(surface, node, name):
                     dy = size(surface, child.get('dy', 0), 1)
                 surface.context.translate(dx, dy)
 
+            # Displacement map: validate everything before painting so that
+            # an invalid primitive never silently behaves as no filter.
+            elif child.tag == 'feDisplacementMap':
+                validate_displacement_map(
+                    surface, node, filter_node, child)
+
 
 def apply_filter_before_painting(surface, node, name):
     """Apply a filter transforming the painting operations."""
@@ -330,6 +341,13 @@ def apply_filter_after_painting(surface, node, name):
                     float(child.get('flood-opacity', 1))))
                 surface.context.fill()
                 surface.context.restore()
+
+            # Displacement map: raster targets were handled before the group
+            # was popped; only fall back here for non-raster destinations.
+            elif child.tag == 'feDisplacementMap' and not isinstance(
+                    surface.context.get_target(), cairo.ImageSurface):
+                apply_displacement_map(
+                    surface, node, filter_node, child)
 
 
 def use(surface, node):
