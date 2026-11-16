@@ -3,6 +3,17 @@
 ======
 
 
+Next version
+============
+
+* Add basic support of the ``feTile`` SVG filter primitive. The reference
+  tile is built from the effective region of ``SourceGraphic`` or
+  ``SourceAlpha`` and repeated over the filter primitive subregion, with the
+  tile origin aligned on the SVG user coordinates. Empty tiles, zero-sized
+  or negative regions and unsupported inputs are handled explicitly, and the
+  number of repetitions and the size of the intermediate image are bounded.
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

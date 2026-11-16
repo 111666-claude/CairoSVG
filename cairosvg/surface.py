@@ -13,6 +13,7 @@ from .defs import (
     apply_filter_after_painting, apply_filter_before_painting, clip_path,
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
+from .filters import has_tile, tile_pattern
 from .helpers import (
     UNITS, PointError, clip_rect, node_format, normalize, paint,
     preserve_ratio, size, transform)
@@ -478,15 +479,35 @@ class Surface(object):
 
         # Apply filter, mask and opacity
         if filter_ or mask or (opacity < 1 and node.children):
-            self.context.pop_group_to_source()
-            if filter_:
-                apply_filter_before_painting(self, node, filter_)
-            if mask in self.masks:
-                paint_mask(self, node, mask, opacity)
+            filter_node = self.filters.get(filter_) if filter_ else None
+            if filter_node is not None and has_tile(filter_node):
+                # feTile needs the painted element as an input image, so keep
+                # the group instead of turning it into the context source.
+                source = self.context.pop_group()
+                pattern, clip = tile_pattern(self, node, filter_node, source)
+                self.context.push_group()
+                if pattern is not None and clip is not None:
+                    self.context.save()
+                    self.context.rectangle(*clip)
+                    self.context.clip()
+                    self.context.set_source(pattern)
+                    self.context.paint()
+                    self.context.restore()
+                self.context.pop_group_to_source()
+                if mask in self.masks:
+                    paint_mask(self, node, mask, opacity)
+                else:
+                    self.context.paint_with_alpha(opacity)
             else:
-                self.context.paint_with_alpha(opacity)
-            if filter_:
-                apply_filter_after_painting(self, node, filter_)
+                self.context.pop_group_to_source()
+                if filter_:
+                    apply_filter_before_painting(self, node, filter_)
+                if mask in self.masks:
+                    paint_mask(self, node, mask, opacity)
+                else:
+                    self.context.paint_with_alpha(opacity)
+                if filter_:
+                    apply_filter_after_painting(self, node, filter_)
 
         # Clean cursor's position after 'text' tags
         if node.tag == 'text':

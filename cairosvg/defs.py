@@ -7,6 +7,7 @@ This module handles clips, gradients, masks, patterns and external nodes.
 
 from .bounding_box import calculate_bounding_box, is_non_empty_bounding_box
 from .features import match_features
+from .filters import has_tile
 from .helpers import paint, size, transform
 from .parser import Tree
 from .shapes import rect
@@ -273,6 +274,9 @@ def prepare_filter(surface, node, name):
 
     if name in surface.filters:
         filter_node = surface.filters[name]
+        if has_tile(filter_node):
+            # feTile is applied on the painted surface, not on the context.
+            return
         for child in filter_node.children:
             # Offset
             if child.tag == 'feOffset':
@@ -294,6 +298,9 @@ def apply_filter_before_painting(surface, node, name):
 
     if name in surface.filters:
         filter_node = surface.filters[name]
+        if has_tile(filter_node):
+            # feTile does not blend the painted surface with its backdrop.
+            return
         for child in filter_node.children:
             # Blend
             if child.tag == 'feBlend':
