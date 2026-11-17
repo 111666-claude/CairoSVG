@@ -3,6 +3,15 @@
 ======
 
 
+Unreleased
+==========
+
+* Implement the ``feComponentTransfer`` filter primitive, with the
+  ``identity``, ``table``, ``discrete``, ``linear`` and ``gamma`` transfer
+  functions on the R, G, B and A channels. Transfers are computed on
+  non-premultiplied color values and the alpha channel is restored afterwards.
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

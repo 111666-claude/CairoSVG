@@ -7,6 +7,7 @@ This module handles clips, gradients, masks, patterns and external nodes.
 
 from .bounding_box import calculate_bounding_box, is_non_empty_bounding_box
 from .features import match_features
+from .filters import component_transfer
 from .helpers import paint, size, transform
 from .parser import Tree
 from .shapes import rect
@@ -299,6 +300,15 @@ def apply_filter_before_painting(surface, node, name):
             if child.tag == 'feBlend':
                 surface.context.set_operator(BLEND_OPERATORS.get(
                     child.get('mode', 'normal'), BLEND_OPERATORS['normal']))
+
+            # Component transfer
+            elif child.tag.lower() == 'fecomponenttransfer':
+                pattern = surface.context.get_source()
+                source = pattern.get_surface()
+                target = component_transfer(child, source)
+                new_pattern = cairo.SurfacePattern(target)
+                new_pattern.set_matrix(pattern.get_matrix())
+                surface.context.set_source(new_pattern)
 
 
 def apply_filter_after_painting(surface, node, name):
