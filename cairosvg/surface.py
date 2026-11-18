@@ -15,7 +15,7 @@ from .defs import (
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
 from .helpers import (
     UNITS, PointError, clip_rect, node_format, normalize, paint,
-    preserve_ratio, size, transform)
+    parse_paint_order, preserve_ratio, size, transform)
 from .image import image, invert_image
 from .parser import Tree
 from .path import draw_markers, path
@@ -436,13 +436,14 @@ class Surface(object):
         self.context.set_font_options(font_options)
 
         # Fill and stroke
-        if self.stroke_and_fill and visible and node.tag in TAGS:
-            # Fill
+        def fill_node():
+            """Fill ``node`` (preserving the current path)."""
             self.context.save()
             paint_source, paint_color = paint(node.get('fill', 'black'))
             if node.get('fill-rule') == 'evenodd':
                 self.context.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
-            if not gradient_or_pattern(self, node, paint_source, fill_opacity):
+            if not gradient_or_pattern(self, node, paint_source,
+                                       fill_opacity):
                 self.context.set_source_rgba(
                     *self.map_color(paint_color, fill_opacity))
             if TAGS[node.tag] == text:
@@ -454,7 +455,8 @@ class Surface(object):
                 self.context.fill_preserve()
             self.context.restore()
 
-            # Stroke
+        def stroke_node(preserve=False):
+            """Stroke ``node``."""
             self.context.save()
             self.context.set_line_width(
                 size(self, node.get('stroke-width', '1')))
@@ -463,13 +465,37 @@ class Surface(object):
                     self, node, paint_source, stroke_opacity):
                 self.context.set_source_rgba(
                     *self.map_color(paint_color, stroke_opacity))
-            self.context.stroke()
+            if preserve:
+                self.context.stroke_preserve()
+            else:
+                self.context.stroke()
             self.context.restore()
-        elif not visible:
-            self.context.new_path()
 
-        # Draw path markers
-        draw_markers(self, node)
+        paint_order = parse_paint_order(node.get('paint-order', 'normal'))
+        if paint_order == ('fill', 'stroke', 'markers'):
+            # Normal paint order: fill, then stroke, then markers
+            if self.stroke_and_fill and visible and node.tag in TAGS:
+                fill_node()
+                stroke_node()
+            elif not visible:
+                self.context.new_path()
+
+            # Draw path markers
+            draw_markers(self, node)
+        else:
+            # Non-default paint order: paint fill, stroke and markers in the
+            # requested order, keeping the path until all operations are done
+            if self.stroke_and_fill and visible and node.tag in TAGS:
+                for operation in paint_order:
+                    if operation == 'fill':
+                        fill_node()
+                    elif operation == 'stroke':
+                        stroke_node(preserve=True)
+                    else:
+                        draw_markers(self, node)
+                self.context.new_path()
+            elif not visible:
+                self.context.new_path()
 
         # Draw children
         if display and node.tag not in INVISIBLE_TAGS:

@@ -53,6 +53,26 @@ def paint(value):
     return (source, color)
 
 
+def parse_paint_order(value):
+    """Parse a ``paint-order`` value into a tuple of painting operations.
+
+    Omitted operations are appended in their default order. Invalid values
+    (unknown or duplicated keywords) fall back to the ``normal`` order.
+
+    See https://www.w3.org/TR/SVG/painting.html#PaintOrder
+
+    """
+    normal = ('fill', 'stroke', 'markers')
+    operations = (value or 'normal').strip().lower().split()
+    if not operations or operations == ['normal']:
+        return normal
+    if len(set(operations)) != len(operations) or any(
+            operation not in normal for operation in operations):
+        return normal
+    return tuple(operations) + tuple(
+        operation for operation in normal if operation not in operations)
+
+
 def node_format(surface, node, reference=True):
     """Return ``(width, height, viewbox)`` of ``node``.
 

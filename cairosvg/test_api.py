@@ -191,3 +191,130 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+def get_png_pixel(png_bytes, x, y):
+    """Return the (r, g, b, a) pixel at (x, y) of a PNG bytestring."""
+    image = cairo.ImageSurface.create_from_png(io.BytesIO(png_bytes))
+    data = image.get_data()
+    offset = y * image.get_stride() + x * 4
+    blue, green, red, alpha = data[offset:offset + 4]
+    return red, green, blue, alpha
+
+
+def test_paint_order_parsing():
+    """Test paint-order values parsing."""
+    from .helpers import parse_paint_order
+
+    normal = ('fill', 'stroke', 'markers')
+    assert parse_paint_order('normal') == normal
+    assert parse_paint_order('') == normal
+    assert parse_paint_order(None) == normal
+    # Omitted operations are appended in default order
+    assert parse_paint_order('fill') == normal
+    assert parse_paint_order('stroke') == ('stroke', 'fill', 'markers')
+    assert parse_paint_order('markers') == ('markers', 'fill', 'stroke')
+    assert parse_paint_order('stroke fill') == ('stroke', 'fill', 'markers')
+    assert parse_paint_order('markers stroke') == (
+        'markers', 'stroke', 'fill')
+    # Parsing is case-insensitive and ignores extra whitespace
+    assert parse_paint_order('  STROKE\tFill ') == (
+        'stroke', 'fill', 'markers')
+    # Duplicated keywords are invalid: fall back to normal
+    assert parse_paint_order('fill fill') == normal
+    assert parse_paint_order('stroke fill stroke') == normal
+    # Unknown keywords are invalid: fall back to normal
+    assert parse_paint_order('unknown') == normal
+    assert parse_paint_order('fill unknown') == normal
+
+
+def test_paint_order_pixels():
+    """Test paint-order rendering with a semi-transparent thick stroke."""
+    svg = b'''<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <path d="M 20 20 L 80 20 L 80 80 L 20 80 Z" fill="rgb(255,0,0)"
+            stroke="rgba(0,0,255,0.5)" stroke-width="20" %s/>
+    </svg>'''
+
+    # Normal order: the stroke is painted over the fill
+    normal = svg2png(bytestring=svg % b'')
+    red, green, blue, alpha = get_png_pixel(normal, 25, 50)
+    assert red < 255 and blue > 0  # fill darkened by the stroke on top
+
+    # Stroke before fill: the fill covers the inner half of the stroke
+    stroke_fill = svg2png(bytestring=svg % b'paint-order="stroke fill"')
+    assert get_png_pixel(stroke_fill, 25, 50) == (255, 0, 0, 255)
+
+    # The outer half of the stroke is identical in both orders
+    assert get_png_pixel(stroke_fill, 15, 50) == get_png_pixel(normal, 15, 50)
+    # The center of the path is identical in both orders
+    assert get_png_pixel(stroke_fill, 50, 50) == (255, 0, 0, 255)
+    assert get_png_pixel(normal, 50, 50) == (255, 0, 0, 255)
+    # Outside of the stroke, nothing is painted
+    assert get_png_pixel(stroke_fill, 5, 50) == (0, 0, 0, 0)
+
+    # "stroke" alone means "stroke fill markers"
+    stroke_only = svg2png(bytestring=svg % b'paint-order="stroke"')
+    assert get_png_pixel(stroke_only, 25, 50) == (255, 0, 0, 255)
+
+    # Invalid values fall back to the normal order
+    invalid = svg2png(bytestring=svg % b'paint-order="stroke stroke"')
+    assert get_png_pixel(invalid, 25, 50) == get_png_pixel(normal, 25, 50)
+    unknown = svg2png(bytestring=svg % b'paint-order="fill bogus"')
+    assert get_png_pixel(unknown, 25, 50) == get_png_pixel(normal, 25, 50)
+
+
+def test_paint_order_inheritance():
+    """Test that paint-order is inherited from surrounding groups."""
+    svg = b'''<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <g paint-order="stroke fill">
+        <path d="M 20 20 L 80 20 L 80 80 L 20 80 Z" fill="rgb(255,0,0)"
+              stroke="rgba(0,0,255,0.5)" stroke-width="20"/>
+      </g>
+    </svg>'''
+    assert get_png_pixel(svg2png(bytestring=svg), 25, 50) == (255, 0, 0, 255)
+
+
+def test_paint_order_opacity():
+    """Test that opacity applies to the whole reordered painting."""
+    svg = b'''<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <path d="M 20 20 L 80 20 L 80 80 L 20 80 Z" fill="rgb(255,0,0)"
+            stroke="rgb(0,0,255)" stroke-width="20" opacity="0.5"
+            paint-order="stroke fill"/>
+    </svg>'''
+    red, green, blue, alpha = get_png_pixel(svg2png(bytestring=svg), 25, 50)
+    # Leaf opacity is folded into fill and stroke opacity: the 50% red fill
+    # is painted over the 50% blue stroke (pixels are premultiplied)
+    assert 120 < red < 135 and 55 < blue < 70
+    assert 185 < alpha < 200  # both semi-transparent paints combined
+
+
+def test_paint_order_markers():
+    """Test that markers can be painted below fill and stroke."""
+    svg = b'''<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs>
+        <marker id="mark" markerUnits="userSpaceOnUse"
+                refX="0" refY="0" markerWidth="30" markerHeight="30">
+          <circle cx="0" cy="0" r="15" fill="rgb(255,0,0)"/>
+        </marker>
+      </defs>
+      <path d="M 20 50 L 50 50 L 80 50" fill="none" stroke="rgb(0,0,255)"
+            stroke-width="20" marker-mid="url(#mark)" %s/>
+    </svg>'''
+
+    # Normal order: markers are painted over the stroke
+    normal = svg2png(bytestring=svg % b'')
+    assert get_png_pixel(normal, 50, 50) == (255, 0, 0, 255)
+
+    # Markers first: the stroke covers the marker
+    markers_first = svg2png(bytestring=svg % b'paint-order="markers"')
+    assert get_png_pixel(markers_first, 50, 50) == (0, 0, 255, 255)
+
+    # Elements without markers are not affected by the "markers" keyword
+    no_marker = b'''<svg xmlns="http://www.w3.org/2000/svg"
+         width="100" height="100">
+      <path d="M 20 20 L 80 20 L 80 80 L 20 80 Z" fill="rgb(255,0,0)"
+            stroke="rgba(0,0,255,0.5)" stroke-width="20"
+            paint-order="markers stroke"/>
+    </svg>'''
+    assert get_png_pixel(svg2png(bytestring=no_marker), 25, 50) == (
+        255, 0, 0, 255)
