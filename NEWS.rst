@@ -3,6 +3,15 @@
 ======
 
 
+Version 2.9.2, not released yet
+===============================
+
+* Support the ``feComposite`` filter primitive with the ``over``, ``in``,
+  ``out``, ``atop``, ``xor`` and ``arithmetic`` operators, including the
+  ``SourceGraphic``, ``SourceAlpha``, named-result and missing-input handling
+  and filter-region clipping
+
+
 Version 2.9.1 released on 2026-09-07
 ====================================
 

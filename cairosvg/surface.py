@@ -13,6 +13,7 @@ from .defs import (
     apply_filter_after_painting, apply_filter_before_painting, clip_path,
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
+from .filters import apply_raster_filter, filter_uses_raster_pipeline
 from .helpers import (
     UNITS, PointError, clip_rect, node_format, normalize, paint,
     preserve_ratio, size, transform)
@@ -479,14 +480,27 @@ class Surface(object):
         # Apply filter, mask and opacity
         if filter_ or mask or (opacity < 1 and node.children):
             self.context.pop_group_to_source()
-            if filter_:
-                apply_filter_before_painting(self, node, filter_)
-            if mask in self.masks:
-                paint_mask(self, node, mask, opacity)
+            if filter_ and filter_ in self.filters and (
+                    filter_uses_raster_pipeline(self.filters[filter_])):
+                # Raster filter pipeline (e.g. feComposite): the group is the
+                # SourceGraphic; the pipeline replaces the context source with
+                # the filtered image, which then goes through mask/opacity.
+                group_surface = self.context.get_source().get_surface()
+                apply_raster_filter(
+                    self, node, self.filters[filter_], group_surface)
+                if mask in self.masks:
+                    paint_mask(self, node, mask, opacity)
+                else:
+                    self.context.paint_with_alpha(opacity)
             else:
-                self.context.paint_with_alpha(opacity)
-            if filter_:
-                apply_filter_after_painting(self, node, filter_)
+                if filter_:
+                    apply_filter_before_painting(self, node, filter_)
+                if mask in self.masks:
+                    paint_mask(self, node, mask, opacity)
+                else:
+                    self.context.paint_with_alpha(opacity)
+                if filter_:
+                    apply_filter_after_painting(self, node, filter_)
 
         # Clean cursor's position after 'text' tags
         if node.tag == 'text':
