@@ -98,7 +98,7 @@ class Surface(object):
                 parent_width=None, parent_height=None, scale=1, unsafe=False,
                 background_color=None, negate_colors=False,
                 invert_images=False, write_to=None, output_width=None,
-                output_height=None, **kwargs):
+                output_height=None, path_collector=None, **kwargs):
         """Convert an SVG document to the format for this class.
 
         Specify the input by passing one of these:
@@ -125,6 +125,13 @@ class Surface(object):
 
         :param write_to: The filename of file-like object where to write the
                          output. If None or not provided, return a byte string.
+        :param path_collector: An optional
+                               :class:`cairosvg.path_collector.PathCollector`
+                               instance. When given, the paths painted on the
+                               canvas are recorded in it (in draw order, with
+                               transformed coordinates) for later inspection
+                               and point hit-testing. When None (the default),
+                               rendering is strictly unchanged.
 
         Only ``bytestring`` can be passed as a positional argument, other
         parameters are keyword-only.
@@ -138,7 +145,8 @@ class Surface(object):
             tree, output, dpi, None, parent_width, parent_height, scale,
             output_width, output_height, background_color,
             map_rgba=negate_color if negate_colors else None,
-            map_image=invert_image if invert_images else None)
+            map_image=invert_image if invert_images else None,
+            path_collector=path_collector)
         instance.finish()
         if write_to is None:
             return output.getvalue()
@@ -146,7 +154,8 @@ class Surface(object):
     def __init__(self, tree, output, dpi, parent_surface=None,
                  parent_width=None, parent_height=None,
                  scale=1, output_width=None, output_height=None,
-                 background_color=None, map_rgba=None, map_image=None):
+                 background_color=None, map_rgba=None, map_image=None,
+                 path_collector=None):
         """Create the surface from a filename or a file-like object.
 
         The rendered content is written to ``output`` which can be a filename,
@@ -182,6 +191,7 @@ class Surface(object):
         self._old_parent_node = self.parent_node = None
         self.output = output
         self.dpi = dpi
+        self.path_collector = path_collector
         self.font_size = size(self, '12pt')
         self.stroke_and_fill = True
         width, height, viewbox = node_format(self, tree)
@@ -267,6 +277,10 @@ class Surface(object):
         self.context.translate(-rect_x, -rect_y)
         if tree.get('overflow', 'hidden') != 'visible':
             self.context.rectangle(rect_x, rect_y, rect_width, rect_height)
+            if self.path_collector is not None:
+                self.path_collector._push_clip_rect(
+                    rect_x, rect_y, rect_width, rect_height,
+                    self.context.get_matrix())
             self.context.clip()
         self.context.scale(scale_x, scale_y)
         self.context.translate(translate_x, translate_y)
@@ -303,6 +317,8 @@ class Surface(object):
         old_font_size = self.font_size
         old_context_size = self.context_width, self.context_height
         self.parent_node = node
+        if self.path_collector is not None:
+            clip_depth = self.path_collector._clip_depth()
 
         if "font" in node:
             font = parse_font(node["font"])
@@ -368,6 +384,12 @@ class Surface(object):
             y = size(self, node.get('y'), 'y')
             width = size(self, node.get('width'), 'x')
             height = size(self, node.get('height'), 'y')
+            if self.path_collector is not None:
+                matrix = self.context.get_matrix()
+                matrix.translate(x, y)
+                self.path_collector._push_clip_rect(
+                    left, top, width - left - right, height - top - bottom,
+                    matrix)
             self.context.save()
             self.context.translate(x, y)
             self.context.rectangle(
@@ -392,6 +414,8 @@ class Surface(object):
                 self.stroke_and_fill = True
                 path.tag = 'clipPath'
                 self.context.restore()
+                if self.path_collector is not None:
+                    self.path_collector._push_clip_path(self.context)
                 # TODO: fill rules are not handled by cairo for clips
                 # if node.get('clip-rule') == 'evenodd':
                 #     self.context.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
@@ -409,6 +433,15 @@ class Surface(object):
             except PointError:
                 # Error in point parsing, do nothing
                 pass
+
+        # Collect the path painted by this node, if requested. Clip paths
+        # (drawn with stroke_and_fill off) and hidden elements paint nothing,
+        # so they are not collected.
+        if (self.path_collector is not None and self.stroke_and_fill and
+                node.tag in PATH_TAGS and
+                node.get('display', 'inline') != 'none' and
+                node.get('visibility', 'visible') != 'hidden'):
+            self.path_collector._collect(node, self.context)
 
         # Get stroke and fill opacity
         stroke_opacity = float(node.get('stroke-opacity', 1))
@@ -494,6 +527,8 @@ class Surface(object):
             self.text_path_width = 0
 
         self.context.restore()
+        if self.path_collector is not None:
+            self.path_collector._truncate_clips(clip_depth)
         self.parent_node = old_parent_node
         self.font_size = old_font_size
         self.context_width, self.context_height = old_context_size
