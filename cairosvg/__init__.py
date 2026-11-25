@@ -59,6 +59,35 @@ def svg2png(bytestring=None, *, file_obj=None, url=None, dpi=96,
         output_width=output_width, output_height=output_height)
 
 
+def svg2surface(bytestring=None, *, file_obj=None, url=None, dpi=96,
+                parent_width=None, parent_height=None, scale=1, unsafe=False,
+                background_color=None, negate_colors=False,
+                invert_images=False, output_width=None, output_height=None):
+    """Render an SVG document to an in-memory Cairo image surface.
+
+    Unlike :func:`svg2png`, which encodes a PNG byte string, this returns a
+    :class:`cairocffi.ImageSurface` whose pixel buffer can be read directly,
+    for example by an interactive canvas. The surface uses the
+    ``FORMAT_ARGB32`` format with premultiplied alpha; width, height and
+    stride are available through the surface's ``get_width()``,
+    ``get_height()`` and ``get_stride()`` methods, and the bytes themselves
+    through ``get_data()`` (on little-endian systems, premultiplied
+    ``B, G, R, A`` per pixel).
+
+    Rendering options (size, scale, background color, transparent areas,
+    invalid input handling, ...) behave exactly like :func:`svg2png`. The
+    returned surface is independent from every other call: modifying or
+    releasing it does not affect subsequent conversions.
+
+    """
+    return surface.PNGSurface.convert_to_surface(
+        bytestring=bytestring, file_obj=file_obj, url=url, dpi=dpi,
+        parent_width=parent_width, parent_height=parent_height, scale=scale,
+        background_color=background_color, negate_colors=negate_colors,
+        invert_images=invert_images, unsafe=unsafe,
+        output_width=output_width, output_height=output_height)
+
+
 def svg2pdf(bytestring=None, *, file_obj=None, url=None, dpi=96,
             parent_width=None, parent_height=None, scale=1, unsafe=False,
             background_color=None, negate_colors=False, invert_images=False,

@@ -6,12 +6,14 @@ These tests can be used as deployment tests.
 """
 
 import io
+import struct
 import sys
 
 import cairocffi as cairo
 import pytest
 
-from . import SURFACES, VERSION, parser, surface, svg2pdf, svg2png
+from . import (
+    SURFACES, VERSION, parser, surface, svg2pdf, svg2png, svg2surface)
 from .__main__ import main
 
 MAGIC_NUMBERS = {
@@ -191,3 +193,160 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+# Fixed opaque shapes: white background, red circle, lime rectangle. Every
+# pixel is fully opaque, so expected channel values are simple and exact.
+OPAQUE_SVG = b'''\
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"
+     viewBox="0 0 8 8">
+  <rect width="8" height="8" fill="white"/>
+  <rect x="0" y="0" width="4" height="4" fill="lime"/>
+  <circle cx="6" cy="6" r="2" fill="red"/>
+</svg>
+'''
+
+# Fixed translucent shapes over a transparent background, exercising
+# premultiplied alpha and fully transparent pixels.
+TRANSLUCENT_SVG = b'''\
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"
+     viewBox="0 0 8 8">
+  <rect x="0" y="0" width="4" height="4" fill="red" opacity="0.5"/>
+  <rect x="4" y="4" width="4" height="4" fill="lime" fill-opacity="0.25"/>
+</svg>
+'''
+
+
+def png_surface(bytestring, **kwargs):
+    """Render an SVG with ``svg2png`` and decode the PNG to a surface."""
+    return cairo.ImageSurface.create_from_png(
+        io.BytesIO(svg2png(bytestring, **kwargs)))
+
+
+def pixel_bytes(image_surface):
+    """Flush the surface and return its raw pixel buffer as bytes."""
+    image_surface.flush()
+    return bytes(image_surface.get_data())
+
+
+def argb_pixel(image_surface, x, y):
+    """Return the native-endian ``0xAARRGGBB`` word of one pixel."""
+    data = pixel_bytes(image_surface)
+    offset = image_surface.get_stride() * y + 4 * x
+    return struct.unpack_from('=I', data, offset)[0]
+
+
+def test_surface_matches_png_opaque():
+    """Opaque fixed shapes: buffer equals the decoded PNG pixel by pixel."""
+    result = svg2surface(OPAQUE_SVG)
+    reference = png_surface(OPAQUE_SVG)
+
+    assert isinstance(result, cairo.ImageSurface)
+    assert result.get_format() == cairo.FORMAT_ARGB32
+    assert (result.get_width(), result.get_height()) == (8, 8)
+    assert result.get_stride() == (
+        cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_ARGB32, 8))
+
+    # Exact, point-for-point comparison against the decoded PNG output.
+    assert pixel_bytes(result) == pixel_bytes(reference)
+
+    # Every pixel is fully opaque.
+    for y in range(8):
+        for x in range(8):
+            assert argb_pixel(result, x, y) & 0xFF000000 == 0xFF000000
+
+    # Spot-check fixed shapes (0xAARRGGBB words).
+    assert argb_pixel(result, 1, 1) == 0xFF00FF00  # lime
+    assert argb_pixel(result, 6, 6) == 0xFFFF0000  # red
+    assert argb_pixel(result, 4, 0) == 0xFFFFFFFF  # white background
+
+
+def test_surface_matches_png_translucent():
+    """Translucent fixed shapes: premultiplied buffer matches decoded PNG."""
+    result = svg2surface(TRANSLUCENT_SVG)
+    reference = png_surface(TRANSLUCENT_SVG)
+
+    # Exact, point-for-point comparison, including anti-aliased edges and
+    # fully transparent pixels.
+    assert pixel_bytes(result) == pixel_bytes(reference)
+
+    # Red with opacity 0.5: premultiplied R = 128, A = 128.
+    assert argb_pixel(result, 1, 1) == 0x80800000
+    # Lime with fill-opacity 0.25: premultiplied G = 64, A = 64.
+    assert argb_pixel(result, 5, 5) == 0x40004000
+    # Untouched corners stay fully transparent.
+    assert argb_pixel(result, 0, 7) == 0x00000000
+    assert argb_pixel(result, 7, 0) == 0x00000000
+
+    # On little-endian systems the byte order is premultiplied BGRA.
+    if sys.byteorder == 'little':
+        data = pixel_bytes(result)
+        assert data[0:4] == bytes((0, 0, 128, 128))
+
+
+def test_surface_background_color_and_scale():
+    """Background color and scaling behave exactly like ``svg2png``."""
+    by_kwargs = dict(background_color='blue', scale=2)
+    result = svg2surface(TRANSLUCENT_SVG, **by_kwargs)
+    reference = png_surface(TRANSLUCENT_SVG, **by_kwargs)
+
+    assert (result.get_width(), result.get_height()) == (16, 16)
+    assert pixel_bytes(result) == pixel_bytes(reference)
+    # The blue background shows through the transparent corner.
+    assert argb_pixel(result, 15, 0) == 0xFF0000FF
+
+    # Explicit output dimensions follow the same rules as svg2png.
+    sized = svg2surface(OPAQUE_SVG, output_width=4, output_height=4)
+    assert (sized.get_width(), sized.get_height()) == (4, 4)
+    assert pixel_bytes(sized) == pixel_bytes(
+        png_surface(OPAQUE_SVG, output_width=4, output_height=4))
+
+
+def test_surface_repeated_calls_are_independent():
+    """Consecutive calls return distinct, isolated surfaces."""
+    first = svg2surface(OPAQUE_SVG)
+    first_data = pixel_bytes(first)
+    second = svg2surface(TRANSLUCENT_SVG)
+    third = svg2surface(OPAQUE_SVG)
+
+    # Distinct underlying objects and independent buffer contents.
+    assert first is not second is not third
+    assert pixel_bytes(third) == first_data
+    assert pixel_bytes(second) != first_data
+
+    # Mutating one surface does not affect surfaces from other calls: the
+    # buffers are independent allocations.
+    buffer = second.get_data()
+    buffer[0:1] = b'\xff'
+    second.mark_dirty()
+    assert pixel_bytes(third) == first_data
+    assert pixel_bytes(first) == first_data
+
+    # Finishing and releasing a surface does not break the next conversion.
+    second.finish()
+    del second
+    again = svg2surface(TRANSLUCENT_SVG)
+    assert argb_pixel(again, 1, 1) == 0x80800000
+    assert pixel_bytes(first) == first_data
+
+
+def test_surface_low_level_api():
+    """The class method behind ``svg2surface`` renders without a PNG target."""
+    image_surface = surface.PNGSurface.convert_to_surface(
+        bytestring=OPAQUE_SVG)
+    assert isinstance(image_surface, cairo.ImageSurface)
+    assert pixel_bytes(image_surface) == pixel_bytes(png_surface(OPAQUE_SVG))
+
+
+@pytest.mark.parametrize('svg, exception', [
+    (b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', ValueError),
+    (b'this is not an SVG document', Exception),
+])
+def test_surface_invalid_input(svg, exception):
+    """Invalid inputs raise the same exceptions as the PNG converter."""
+    with pytest.raises(exception):
+        svg2png(svg)
+    with pytest.raises(exception):
+        svg2surface(svg)

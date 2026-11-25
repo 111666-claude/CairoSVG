@@ -524,6 +524,47 @@ class PNGSurface(Surface):
     """A surface that writes in PNG format."""
     device_units_per_user_units = 1
 
+    @classmethod
+    def convert_to_surface(cls, bytestring=None, *, file_obj=None, url=None,
+                           dpi=96, parent_width=None, parent_height=None,
+                           scale=1, unsafe=False, background_color=None,
+                           negate_colors=False, invert_images=False,
+                           output_width=None, output_height=None, **kwargs):
+        """Convert an SVG document to an in-memory Cairo image surface.
+
+        This is the in-memory counterpart of :meth:`convert`: the SVG is
+        rendered with the exact same code path, but no PNG is encoded. The
+        returned :class:`cairocffi.ImageSurface` uses the 32-bit
+        ``FORMAT_ARGB32`` format with premultiplied alpha and is fully owned
+        by the caller: drawing on it, calling :meth:`~Surface.finish` on it
+        or letting it be garbage-collected has no effect on later
+        conversions, which always allocate a fresh surface.
+
+        The parameters are identical to :meth:`convert`, except that
+        ``write_to`` is not accepted (there is nothing to write).
+
+        :returns: A new, flushed :class:`cairocffi.ImageSurface` containing
+                  the rendered pixels. Use ``surface.get_width()``,
+                  ``surface.get_height()``, ``surface.get_stride()`` and
+                  ``surface.get_data()`` to read the buffer. On
+                  little-endian systems each 4-byte pixel is stored as
+                  premultiplied ``B, G, R, A`` bytes (native-endian
+                  ``0xAARRGGBB`` on 32-bit words).
+
+        """
+        tree = Tree(
+            bytestring=bytestring, file_obj=file_obj, url=url, unsafe=unsafe,
+            **kwargs)
+        instance = cls(
+            tree, None, dpi, None, parent_width, parent_height, scale,
+            output_width, output_height, background_color,
+            map_rgba=negate_color if negate_colors else None,
+            map_image=invert_image if invert_images else None)
+        # Flush instead of finish: pending drawing is committed to the pixel
+        # buffer while the surface stays fully usable for the caller.
+        instance.cairo.flush()
+        return instance.cairo
+
     def _create_surface(self, width, height):
         """Create and return ``(cairo_surface, width, height)``."""
         width = int(round(width))
