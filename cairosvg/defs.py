@@ -116,43 +116,110 @@ def clip_path(surface, node):
         surface.paths[node['id']] = node
 
 
-def paint_mask(surface, node, name, opacity):
+def paint_mask(surface, node, name, opacity, bounding_box=None):
     """Paint the mask of the current surface."""
     mask_node = surface.masks[name]
     mask_node.tag = 'g'
     mask_node['opacity'] = opacity
 
-    if mask_node.get('maskUnits') == 'userSpaceOnUse':
+    # Geometry of the referencing node, in the user coordinate system active
+    # when the mask is referenced. It is the object bounding box used to
+    # resolve objectBoundingBox units. It can be given by the caller before
+    # the node is drawn, as some renderers (e.g. <image> pointing to an SVG
+    # or <use>) consume and remove the node x/y attributes.
+    if bounding_box is None:
+        bounding_box = (
+            size(surface, node.get('x'), 'x'),
+            size(surface, node.get('y'), 'y'),
+            size(surface, node.get('width'), 'x'),
+            size(surface, node.get('height'), 'y'))
+    bbox_x, bbox_y, bbox_width, bbox_height = bounding_box
+
+    user_space_units = mask_node.get('maskUnits') == 'userSpaceOnUse'
+    if user_space_units:
         width_ref, height_ref = 'x', 'y'
     else:
-        x = size(surface, node.get('x'), 'x')
-        y = size(surface, node.get('y'), 'y')
-        width = size(surface, node.get('width'), 'x')
-        height = size(surface, node.get('height'), 'y')
-        width_ref = width or surface.width
-        height_ref = height or surface.height
+        width_ref = bbox_width or surface.width
+        height_ref = bbox_height or surface.height
 
-    mask_node['x'] = size(surface, mask_node.get('x', '-10%'), width_ref)
-    mask_node['y'] = size(surface, mask_node.get('y', '-10%'), height_ref)
-    mask_node['height'] = size(
-        surface, mask_node.get('height', '120%'), height_ref)
-    mask_node['width'] = size(
-        surface, mask_node.get('width', '120%'), width_ref)
+    if user_space_units:
+        mask_x = size(surface, mask_node.get('x', '-10%'), width_ref)
+        mask_y = size(surface, mask_node.get('y', '-10%'), height_ref)
+        mask_width = size(
+            surface, mask_node.get('width', '120%'), width_ref)
+        mask_height = size(
+            surface, mask_node.get('height', '120%'), height_ref)
+    else:
+        # maskUnits="objectBoundingBox": a unitless length is a fraction of
+        # the referencing node bounding box, like percentages
+        mask_x = mask_length(
+            surface, mask_node.get('x', '-10%'), width_ref)
+        mask_y = mask_length(
+            surface, mask_node.get('y', '-10%'), height_ref)
+        mask_width = mask_length(
+            surface, mask_node.get('width', '120%'), width_ref)
+        mask_height = mask_length(
+            surface, mask_node.get('height', '120%'), height_ref)
 
-    if mask_node.get('maskUnits') == 'userSpaceOnUse':
-        x = mask_node['x']
-        y = mask_node['y']
-        mask_node['viewBox'] = '{x} {y} {width} {height}'.format(**mask_node)
+    mask_node['x'] = mask_x
+    mask_node['y'] = mask_y
+    mask_node['width'] = mask_width
+    mask_node['height'] = mask_height
+
+    if user_space_units:
+        # Mask region is directly expressed in the referencing user space
+        region_x, region_y = mask_x, mask_y
+    else:
+        # Mask x/y are relative to the referencing node bounding box origin
+        region_x = bbox_x + mask_x
+        region_y = bbox_y + mask_y
+
+    if mask_width == 0 or mask_height == 0:
+        # A null mask region masks the referencing element out
+        return
+
+    # Give the mask surface a user space mapping the mask region to its own
+    # origin. Mask content using maskContentUnits="userSpaceOnUse" (the
+    # default) keeps the referencing user coordinates, so the mask is
+    # aligned by the single region translation below, without any extra
+    # translation of the node and without scaling the mask twice.
+    mask_node['viewBox'] = (
+        f'{region_x} {region_y} {mask_width} {mask_height}')
+
+    if mask_node.get('maskContentUnits') == 'objectBoundingBox':
+        # Mask content coordinates are fractions of the referencing bounding
+        # box
+        mask_node['transform'] = (
+            f'translate({bbox_x}, {bbox_y}) '
+            f'scale({bbox_width}, {bbox_height})')
 
     from .surface import SVGSurface  # circular import
     mask_surface = SVGSurface(mask_node, None, surface.dpi, surface)
     surface.context.save()
-    surface.context.translate(x, y)
+    surface.context.translate(region_x, region_y)
     surface.context.scale(
-        mask_node['width'] / mask_surface.width,
-        mask_node['height'] / mask_surface.height)
+        mask_width / mask_surface.width,
+        mask_height / mask_surface.height)
     surface.context.mask_surface(mask_surface.cairo)
     surface.context.restore()
+
+
+def mask_length(surface, value, reference):
+    """Resolve a length of a mask region.
+
+    With ``maskUnits="objectBoundingBox"``, a unitless number is a fraction
+    of the referencing node bounding box (given as float ``reference``),
+    while percentages and absolute units are resolved as usual.
+
+    """
+    if isinstance(value, str):
+        try:
+            fraction = float(value)
+        except ValueError:
+            pass
+        else:
+            return fraction * reference
+    return size(surface, value, reference)
 
 
 def draw_gradient(surface, node, name, opacity):

@@ -324,6 +324,17 @@ class Surface(object):
         filter_ = parse_url(node.get('filter')).fragment
         opacity = float(node.get('opacity', 1))
 
+        # Store geometry before drawing the node: some renderers (SVG images,
+        # use) consume the node x/y attributes, while mask coordinates need
+        # the original object bounding box
+        mask_bounding_box = None
+        if mask:
+            mask_bounding_box = (
+                size(self, node.get('x'), 'x'),
+                size(self, node.get('y'), 'y'),
+                size(self, node.get('width'), 'x'),
+                size(self, node.get('height'), 'y'))
+
         if filter_:
             prepare_filter(self, node, filter_)
 
@@ -482,7 +493,8 @@ class Surface(object):
             if filter_:
                 apply_filter_before_painting(self, node, filter_)
             if mask in self.masks:
-                paint_mask(self, node, mask, opacity)
+                paint_mask(
+                    self, node, mask, opacity, mask_bounding_box)
             else:
                 self.context.paint_with_alpha(opacity)
             if filter_:
