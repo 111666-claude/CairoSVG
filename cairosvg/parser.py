@@ -399,7 +399,10 @@ class Tree(Node):
 
         self.xml_tree = tree
         root = cssselect2.ElementWrapper.from_xml_root(tree)
-        style = parent.style if parent else css.parse_stylesheets(self, url)
+        style = (
+            parent.style if parent
+            else css.parse_stylesheets(
+                self, url, bytestring if not self_is_parent else None))
         if element_id:
             for element in root.iter_subtree():
                 if element.id == element_id:

@@ -16,6 +16,15 @@ HTTP_HEADERS = {'User-Agent': f'CairoSVG {VERSION}'}
 URL = re.compile(r'url\((.+)\)')
 
 
+class URLFetchingError(Exception):
+    r"""Exception raised when a resource cannot be fetched.
+
+    This includes missing files and network errors, as well as attempts to
+    fetch external resources while the default safe URL fetcher is in use.
+
+    """
+
+
 def normalize_url(url):
     """Normalize ``url`` for underlying NT/Unix operating systems.
 

@@ -3,14 +3,92 @@ Handle CSS stylesheets.
 
 """
 
+import re
+
 import cssselect2
 import tinycss2
 
-from .url import parse_url
+from .url import URLFetchingError, parse_url, safe_fetch
+
+# Processing instructions are not part of the ElementTree document built by
+# defusedxml (they are dropped while parsing), so xml-stylesheet PIs are found
+# by scanning the raw XML source. See https://www.w3.org/TR/xml-stylesheet/.
+STYLESHEET_PI = re.compile(r'<\?xml-stylesheet\s+(.*?)\?>', re.DOTALL)
+PSEUDO_ATTRIBUTE = re.compile(
+    r'([:A-Za-z_][-\w:.]*)\s*=\s*(["\'])(.*?)\2', re.DOTALL)
 
 
-def find_stylesheets(tree):
+def parse_xml_stylesheets(tree, url, bytestring):
+    """Find the external CSS stylesheets declared by xml-stylesheet PIs.
+
+    Relative ``href`` attributes are resolved against the URL of the SVG
+    document. Stylesheets are fetched through the document's URL fetcher, so
+    that the current security policy applies: in the default safe mode only
+    data URLs can be fetched, any other external stylesheet raises a
+    :class:`URLFetchingError`, and a missing or unreadable stylesheet also
+    raises a :class:`URLFetchingError` rather than being silently ignored.
+
+    See https://www.w3.org/TR/xml-stylesheet/.
+
+    """
+    if bytestring is None:
+        return
+    # Pseudo-attributes are plain ASCII; an unsupported encoding would have
+    # already raised while parsing the XML itself.
+    source = bytestring.decode('utf-8', errors='replace')
+    seen_urls = set()
+    # Alternate stylesheets (title set, not the first preferred one) are
+    # ignored: CairoSVG has no mechanism to select an alternate stylesheet.
+    preferred_title = None
+    for match in STYLESHEET_PI.finditer(source):
+        attributes = {
+            pseudo_match.group(1): pseudo_match.group(3)
+            for pseudo_match in PSEUDO_ATTRIBUTE.finditer(match.group(1))}
+        href = attributes.get('href')
+        if not href:
+            # An xml-stylesheet PI without href is an error, ignore it.
+            continue
+        if attributes.get('type', 'text/css') != 'text/css':
+            continue
+        # TODO: support media types
+        title = attributes.get('title')
+        if title is not None:
+            if preferred_title is None:
+                preferred_title = title
+            elif title != preferred_title:
+                # Only the first preferred stylesheet is applied, every
+                # other titled stylesheet is an alternate one.
+                continue
+        css_url = parse_url(href, url)
+        css_url_text = css_url.geturl()
+        if css_url_text in seen_urls:
+            # Duplicated PIs pointing at the same resource are fetched once.
+            continue
+        seen_urls.add(css_url_text)
+        if tree.url_fetcher is safe_fetch and not (
+                css_url.scheme == 'data'):
+            raise URLFetchingError(
+                f'External stylesheet {css_url_text!r} cannot be fetched in '
+                'safe mode. Use unsafe=True or provide a custom '
+                'url_fetcher to allow external resources.')
+        try:
+            css_bytes = tree.fetch_url(css_url, 'text/css')
+        except URLFetchingError:
+            raise
+        except Exception as exception:
+            raise URLFetchingError(
+                f'Could not fetch stylesheet {css_url_text!r}: {exception}'
+            ) from exception
+        yield tinycss2.parse_stylesheet(
+            css_bytes.decode('utf-8', errors='replace'),
+            skip_comments=True, skip_whitespace=True)
+
+
+def find_stylesheets(tree, url, bytestring):
     """Find the stylesheets included in ``tree``."""
+    # External stylesheets referenced by xml-stylesheet processing
+    # instructions come first, as PIs are declared in the document prolog.
+    yield from parse_xml_stylesheets(tree, url, bytestring)
     # TODO: support contentStyleType on <svg>
     default_type = 'text/css'
     for element in tree.xml_tree.iter():
@@ -65,7 +143,7 @@ def parse_declarations(input):
     return normal_declarations, important_declarations
 
 
-def parse_stylesheets(tree, url):
+def parse_stylesheets(tree, url, bytestring=None):
     """Find and parse the stylesheets in ``tree``.
 
     Return two :class:`cssselect2.Matcher` objects,
@@ -74,7 +152,7 @@ def parse_stylesheets(tree, url):
     """
     normal_matcher = cssselect2.Matcher()
     important_matcher = cssselect2.Matcher()
-    for stylesheet in find_stylesheets(tree):
+    for stylesheet in find_stylesheets(tree, url, bytestring):
         for rule in find_stylesheets_rules(tree, stylesheet, url):
             normal_declarations, important_declarations = parse_declarations(
                 rule.content)

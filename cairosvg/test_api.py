@@ -13,6 +13,7 @@ import pytest
 
 from . import SURFACES, VERSION, parser, surface, svg2pdf, svg2png
 from .__main__ import main
+from .url import URLFetchingError
 
 MAGIC_NUMBERS = {
     'SVG': b'<?xml',
@@ -188,3 +189,212 @@ def test_script(tmp_path):
     # Explicit -f wins
     assert not test_main([svg_filename, '-o', str(temp_3), '-f', 'pdf'])
     assert read_file(str(temp_3))[:100] == expected_pdf
+
+
+# A simple SVG whose only shape would be black without an external stylesheet
+EXTERNAL_CSS_SVG = b'''\
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/css" href="style.css"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect id="square" width="10" height="10"/>
+</svg>
+'''
+
+EXTERNAL_CSS = b'rect { fill: #ff0000; }\n'
+
+
+def _center_pixel(png_bytes):
+    """Return the opaque ``(r, g, b, a)`` color of the center PNG pixel."""
+    image = cairo.ImageSurface.create_from_png(io.BytesIO(png_bytes))
+    data = image.get_data()
+    width = image.get_width()
+    height = image.get_height()
+    # ARGB32 is stored as BGRA on little-endian machines
+    offset = (height // 2) * image.get_stride() + (width // 2) * 4
+    b, g, r, a = data[offset:offset + 4]
+    return r, g, b, a
+
+
+def test_external_stylesheet_local_file(tmp_path):
+    """An xml-stylesheet PI applies CSS stored in a sibling file."""
+    svg_path = tmp_path / 'sample.svg'
+    svg_path.write_bytes(EXTERNAL_CSS_SVG)
+    (tmp_path / 'style.css').write_bytes(EXTERNAL_CSS)
+
+    # Without the external stylesheet the rect is black
+    black_svg = EXTERNAL_CSS_SVG.split(b'\n', 2)[2]
+    assert _center_pixel(svg2png(black_svg))[:3] == (0, 0, 0)
+
+    # With unsafe=True the local stylesheet is found and applied
+    png = svg2png(url=str(svg_path), unsafe=True)
+    assert _center_pixel(png)[:3] == (255, 0, 0)
+
+
+def test_external_stylesheet_relative_href(tmp_path):
+    """Relative hrefs are resolved from the SVG file location."""
+    assets = tmp_path / 'assets'
+    assets.mkdir()
+    (assets / 'style.css').write_bytes(b'rect { fill: rgb(0, 128, 0); }')
+    svg_path = tmp_path / 'nested' / 'sample.svg'
+    svg_path.parent.mkdir()
+    svg_path.write_bytes(
+        EXTERNAL_CSS_SVG.replace(b'href="style.css"',
+                                 b'href="../assets/style.css"'))
+
+    png = svg2png(url=str(svg_path), unsafe=True)
+    assert _center_pixel(png)[:3] == (0, 128, 0)
+
+
+def test_external_stylesheet_safe_mode_blocks_local_file(tmp_path):
+    """Default safe mode never silently opens a local external stylesheet."""
+    svg_path = tmp_path / 'sample.svg'
+    svg_path.write_bytes(EXTERNAL_CSS_SVG)
+    (tmp_path / 'style.css').write_bytes(EXTERNAL_CSS)
+
+    with pytest.raises(URLFetchingError, match='safe mode'):
+        svg2png(url=str(svg_path))
+
+
+def test_external_stylesheet_safe_mode_blocks_network():
+    """Default safe mode does not fetch stylesheets over the network."""
+    svg = EXTERNAL_CSS_SVG.replace(
+        b'href="style.css"',
+        b'href="http://example.invalid/style.css"')
+    with pytest.raises(URLFetchingError, match='safe mode'):
+        svg2png(svg)
+
+
+def test_external_stylesheet_missing_resource(tmp_path):
+    """A referenced stylesheet that does not exist raises an explicit error."""
+    svg_path = tmp_path / 'sample.svg'
+    svg_path.write_bytes(EXTERNAL_CSS_SVG)
+
+    with pytest.raises(URLFetchingError, match='Could not fetch'):
+        svg2png(url=str(svg_path), unsafe=True)
+
+
+def test_external_stylesheet_data_url_safe_mode():
+    """data: URL stylesheets are allowed by the default safe fetcher."""
+    svg = b'''\
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/css"
+    href="data:text/css;charset=utf-8,rect%20%7B%20fill%3A%20blue%3B%20%7D"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="10" height="10"/>
+</svg>
+'''
+    assert _center_pixel(svg2png(svg))[:3] == (0, 0, 255)
+
+
+def _render_png(svg_path, **kwargs):
+    """Render an SVG file to PNG bytes through the low-level surface API."""
+    tree = parser.Tree(url=str(svg_path), **kwargs)
+    file_obj = io.BytesIO()
+    png_surface = surface.PNGSurface(tree, file_obj, 96)
+    png_surface.finish()
+    return file_obj.getvalue()
+
+
+def test_external_stylesheet_custom_url_fetcher(tmp_path):
+    """A user-provided URL fetcher is used for external stylesheets."""
+    svg_path = tmp_path / 'sample.svg'
+    svg_path.write_bytes(EXTERNAL_CSS_SVG)
+    (tmp_path / 'style.css').write_bytes(b'rect { fill: purple; }')
+
+    def fetcher(url, resource_type):
+        with open(url.removeprefix('file://'), 'rb') as file_obj:
+            return file_obj.read()
+
+    png = _render_png(svg_path, url_fetcher=fetcher)
+    assert _center_pixel(png)[:3] == (128, 0, 128)
+
+
+def test_external_stylesheet_cascade_order(tmp_path):
+    """External CSS, inline style and presentation attributes cascade."""
+    svg_path = tmp_path / 'sample.svg'
+    (tmp_path / 'style.css').write_bytes(
+        b'rect { fill: red; stroke: blue; }\n')
+    # Presentation attribute (lowest priority) loses to the external CSS,
+    # the inline style attribute (highest priority) wins over the CSS.
+    svg_path.write_text('''\
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/css" href="style.css"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="10" height="10" fill="lime"
+        style="fill: #00ffff"/>
+</svg>
+''')
+    assert _center_pixel(svg2png(url=str(svg_path), unsafe=True))[:3] == (
+        0, 255, 255)
+
+    # Without the inline style attribute, the external CSS beats the
+    # presentation attribute.
+    svg_path.write_text('''\
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/css" href="style.css"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="10" height="10" fill="lime"/>
+</svg>
+''')
+    assert _center_pixel(svg2png(url=str(svg_path), unsafe=True))[:3] == (
+        255, 0, 0)
+
+
+def test_external_stylesheet_duplicate_pi(tmp_path):
+    """Two PIs referencing the same stylesheet fetch it only once."""
+    svg_path = tmp_path / 'sample.svg'
+    svg_path.write_bytes(b'''\
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/css" href="style.css"?>
+<?xml-stylesheet type="text/css" href="style.css"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="10" height="10"/>
+</svg>
+''')
+    calls = []
+
+    def fetcher(url, resource_type):
+        calls.append((url, resource_type))
+        if resource_type == 'text/css':
+            return b'rect { fill: teal; }'
+        with open(url.removeprefix('file://'), 'rb') as file_obj:
+            return file_obj.read()
+
+    png = _render_png(svg_path, url_fetcher=fetcher)
+    assert len([call for call in calls if call[1] == 'text/css']) == 1
+    assert _center_pixel(png)[:3] == (0, 128, 128)
+
+
+def test_no_stylesheet_pi_unchanged():
+    """Documents without an xml-stylesheet PI render exactly as before."""
+    svg = b'''\
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="10" height="10" fill="orange"/>
+</svg>
+'''
+    assert _center_pixel(svg2png(svg))[:3] == (255, 165, 0)
+    assert svg2png(svg) == svg2png(svg)
+
+
+def test_alternate_stylesheets_ignored(tmp_path):
+    """Alternate (titled) stylesheets are not applied; only the preferred."""
+    svg_path = tmp_path / 'sample.svg'
+    svg_path.write_bytes(b'''\
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/css" href="preferred.css" title="A"?>
+<?xml-stylesheet alternate="yes" type="text/css"
+    href="alternate.css" title="B"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="10" height="10"/>
+</svg>
+''')
+    (tmp_path / 'preferred.css').write_bytes(b'rect { fill: red; }')
+    (tmp_path / 'alternate.css').write_bytes(b'rect { fill: green; }')
+
+    def fetcher(url, resource_type):
+        with open(url.removeprefix('file://'), 'rb') as file_obj:
+            return file_obj.read()
+
+    assert _center_pixel(
+        _render_png(svg_path, url_fetcher=fetcher))[:3] == (255, 0, 0)

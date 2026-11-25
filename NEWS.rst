@@ -3,6 +3,18 @@
 ======
 
 
+Future version
+==============
+
+* Support external CSS stylesheets declared with ``xml-stylesheet`` processing
+  instructions. Relative ``href`` attributes are resolved against the SVG
+  document URL and stylesheets are fetched using the current URL fetcher and
+  security policy. In the default safe mode, only ``data:`` URL stylesheets
+  are allowed; local and network stylesheets require ``unsafe=True`` or a
+  custom ``url_fetcher``, and missing stylesheets raise a
+  ``URLFetchingError`` instead of being silently ignored.
+
+
 Version 2.9.0 released on 2026-03-13
 ====================================
 
