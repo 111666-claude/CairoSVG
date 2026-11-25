@@ -9,6 +9,10 @@ import io
 import cairocffi as cairo
 
 from .colors import color, negate_color
+from .css import (  # noqa: F401  (re-exported for convenient imports)
+    CSSError, CSSParseError, CSSParserError, CSSSyntaxError, InvalidCSS,
+    InvalidStylesheet, ParseError, StylesheetError, StylesheetParseError,
+    StylesheetSyntaxError)
 from .defs import (
     apply_filter_after_painting, apply_filter_before_painting, clip_path,
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
@@ -94,7 +98,8 @@ class Surface(object):
     surface_class = None
 
     @classmethod
-    def convert(cls, bytestring=None, *, file_obj=None, url=None, dpi=96,
+    def convert(cls, bytestring=None, stylesheet=None, *, file_obj=None,
+                url=None, dpi=96,
                 parent_width=None, parent_height=None, scale=1, unsafe=False,
                 background_color=None, negate_colors=False,
                 invert_images=False, write_to=None, output_width=None,
@@ -119,6 +124,18 @@ class Surface(object):
                        This does NOT restrict fetching of the main SVG input
                        specified via the ``url`` parameter.
                        Applications should validate input URLs to prevent SSRF.
+        :param stylesheet: CSS text added by the caller, as an extra author
+                           stylesheet. It is appended after the stylesheets
+                           embedded in the SVG, so later rules and equal
+                           specificity caller rules win, while inline
+                           ``style`` attributes and ``!important`` rules keep
+                           their usual CSS precedence. It can also be a
+                           sequence of CSS texts, appended in order. The
+                           ``stylesheets``, ``css``, ``extra_css``,
+                           ``custom_css``, ``user_css`` and ``style`` keyword
+                           names are accepted as aliases. Invalid CSS raises
+                           :class:`~cairosvg.css.CSSParseError` with the
+                           offending line and column.
 
 
         Specifiy the output with:
@@ -132,7 +149,7 @@ class Surface(object):
         """
         tree = Tree(
             bytestring=bytestring, file_obj=file_obj, url=url, unsafe=unsafe,
-            **kwargs)
+            stylesheet=stylesheet, **kwargs)
         output = write_to or io.BytesIO()
         instance = cls(
             tree, output, dpi, None, parent_width, parent_height, scale,

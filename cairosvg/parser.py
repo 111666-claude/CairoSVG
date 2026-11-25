@@ -12,6 +12,10 @@ import cssselect2
 from defusedxml import ElementTree
 
 from . import css
+from .css import (  # noqa: F401  (re-exported for convenient imports)
+    CSSError, CSSParseError, CSSParserError, CSSSyntaxError, InvalidCSS,
+    InvalidStylesheet, ParseError, StylesheetError, StylesheetParseError,
+    StylesheetSyntaxError)
 from .features import match_features
 from .helpers import flatten, pop_rotation, rotations
 from .url import fetch, parse_url, read_url, safe_fetch
@@ -165,6 +169,10 @@ class Node(dict):
         node = element.etree_element
         self.element = element
         self.style = style
+        # Keep the caller stylesheets reachable from every node; child nodes
+        # and nested trees inherit them from their parent.
+        if not hasattr(self, 'stylesheets'):
+            self.stylesheets = getattr(parent, 'stylesheets', ())
         self.tag = (
             element.local_name
             if element.namespace_url in ('', 'http://www.w3.org/2000/svg') else
@@ -353,6 +361,15 @@ class Tree(Node):
 
         self.url_fetcher = kwargs.get('url_fetcher', fetch)
 
+        # Caller stylesheets can be given under several parameter names.
+        # Nested trees (tref, use, ...) that do not provide their own inherit
+        # the stylesheets and compiled matchers of their parent.
+        stylesheet_kwargs = css.pop_stylesheet_keywords(kwargs)
+        if any(value is not None for value in stylesheet_kwargs.values()):
+            self.stylesheets = css.collect_stylesheets(**stylesheet_kwargs)
+        else:
+            self.stylesheets = getattr(parent, 'stylesheets', ())
+
         if bytestring is not None:
             self.url = url
         elif file_obj is not None:
@@ -399,7 +416,11 @@ class Tree(Node):
 
         self.xml_tree = tree
         root = cssselect2.ElementWrapper.from_xml_root(tree)
-        style = parent.style if parent else css.parse_stylesheets(self, url)
+        if parent is not None:
+            style = parent.style
+        else:
+            style = css.parse_stylesheets(
+                self, url, self.stylesheets)
         if element_id:
             for element in root.iter_subtree():
                 if element.id == element_id:
