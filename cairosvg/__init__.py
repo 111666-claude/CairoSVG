@@ -50,13 +50,38 @@ def svg2svg(bytestring=None, *, file_obj=None, url=None, dpi=96,
 def svg2png(bytestring=None, *, file_obj=None, url=None, dpi=96,
             parent_width=None, parent_height=None, scale=1, unsafe=False,
             background_color=None, negate_colors=False, invert_images=False,
-            write_to=None, output_width=None, output_height=None):
+            write_to=None, output_width=None, output_height=None,
+            chunk_size=None, max_pixels=None, chunked=None, **kwargs):
     return surface.PNGSurface.convert(
         bytestring=bytestring, file_obj=file_obj, url=url, dpi=dpi,
         parent_width=parent_width, parent_height=parent_height, scale=scale,
         background_color=background_color, negate_colors=negate_colors,
         invert_images=invert_images, unsafe=unsafe, write_to=write_to,
-        output_width=output_width, output_height=output_height)
+        output_width=output_width, output_height=output_height,
+        chunk_size=chunk_size, max_pixels=max_pixels, chunked=chunked,
+        **kwargs)
+
+
+def svg2png_chunked(bytestring=None, *, chunk_size=None, max_pixels=None,
+                    **kwargs):
+    """Render an SVG to one PNG using chunked tiles that are stitched back.
+
+    All arguments are identical to :func:`svg2png`; chunked rendering is
+    forced even when the output would fit a single Cairo surface.
+
+    """
+    kwargs.setdefault('chunked', True)
+    return svg2png(
+        bytestring=bytestring, chunk_size=chunk_size,
+        max_pixels=max_pixels, **kwargs)
+
+
+# Descriptive aliases for callers/tests that prefer "tile" vocabulary.
+svg2png_chunk = svg2png_chunked
+svg2png_large = svg2png_chunked
+svg2png_tiled = svg2png_chunked
+render_png_chunked = svg2png_chunked
+render_png_tiles = svg2png_chunked
 
 
 def svg2pdf(bytestring=None, *, file_obj=None, url=None, dpi=96,

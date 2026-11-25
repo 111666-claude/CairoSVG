@@ -50,6 +50,16 @@ def main(argv=None, stdout=None, stdin=None):
     parser.add_argument(
         '--output-height', default=None, type=float,
         help='desired output height in pixels')
+    parser.add_argument(
+        '--chunk-size', '--tile-size', '--chunk', dest='chunk_size',
+        default=None, type=int,
+        help='maximum width/height of a rendering tile in pixels; large PNG '
+             'outputs exceeding Cairo surface limits are stitched back '
+             'together automatically')
+    parser.add_argument(
+        '--max-pixels', '--pixel-limit', dest='max_pixels', default=None,
+        type=int,
+        help='maximum allowed number of output pixels (width * height)')
 
     parser.add_argument('-o', '--output', default='-', help='output filename')
 
@@ -62,6 +72,10 @@ def main(argv=None, stdout=None, stdin=None):
         'invert_images': options.invert_images,
         'output_width': options.output_width,
         'output_height': options.output_height}
+    if options.chunk_size is not None:
+        kwargs['chunk_size'] = options.chunk_size
+    if options.max_pixels is not None:
+        kwargs['max_pixels'] = options.max_pixels
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     kwargs['write_to'] = (
