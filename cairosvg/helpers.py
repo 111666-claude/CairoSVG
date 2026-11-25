@@ -194,18 +194,19 @@ def rotate(x, y, angle):
     return x * cos(angle) - y * sin(angle), y * cos(angle) + x * sin(angle)
 
 
-def transform(surface, transform_string, gradient=None, transform_origin=None):
-    """Transform ``surface`` or ``gradient`` if supplied using ``string``.
+def transform_matrix(surface, transform_string, transform_origin=None):
+    """Get the matrix corresponding to the transformations in ``string``.
 
     See http://www.w3.org/TR/SVG/coords.html#TransformAttribute
 
     """
+    matrix = cairo.Matrix()
+
     if not transform_string:
-        return
+        return matrix
 
     transformations = re.findall(
         r'(\w+) ?\( ?(.*?) ?\)', normalize(transform_string))
-    matrix = cairo.Matrix()
 
     if transform_origin:
         origin = transform_origin.split(' ')
@@ -223,7 +224,7 @@ def transform(surface, transform_string, gradient=None, transform_origin=None):
             else:
                 origin_y = origin[1]
         else:
-            return
+            return matrix
 
         if origin_x == 'center':
             origin_x = surface.width / 2
@@ -272,6 +273,20 @@ def transform(surface, transform_string, gradient=None, transform_origin=None):
 
     if transform_origin:
         matrix.translate(-float(origin_x), -float(origin_y))
+
+    return matrix
+
+
+def transform(surface, transform_string, gradient=None, transform_origin=None):
+    """Transform ``surface`` or ``gradient`` if supplied using ``string``.
+
+    See http://www.w3.org/TR/SVG/coords.html#TransformAttribute
+
+    """
+    if not transform_string:
+        return
+
+    matrix = transform_matrix(surface, transform_string, transform_origin)
 
     try:
         matrix.invert()

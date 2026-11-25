@@ -10,7 +10,7 @@ from math import (
     tau)
 
 from .features import match_features
-from .helpers import PATH_LETTERS, normalize, point, size
+from .helpers import PATH_LETTERS, normalize, point, size, transform_matrix
 from .parser import Tree
 from .url import parse_url
 
@@ -26,6 +26,13 @@ def calculate_bounding_box(surface, node):
     if 'bounding_box' not in node and node.tag in BOUNDING_BOX_METHODS:
         bounding_box = BOUNDING_BOX_METHODS[node.tag](surface, node)
         if is_non_empty_bounding_box(bounding_box):
+            if node.get('transform'):
+                # Apply the node's own transformation to get the bounding
+                # box in the actual drawing coordinates
+                matrix = transform_matrix(
+                    surface, node.get('transform'),
+                    transform_origin=node.get('transform-origin'))
+                bounding_box = transform_bounding_box(matrix, bounding_box)
             node['bounding_box'] = bounding_box
     return node.get('bounding_box')
 
@@ -343,7 +350,31 @@ def bounding_box_use(surface, node):
         unsafe=node.unsafe)
     if not match_features(tree.xml_tree):
         return None
-    return calculate_bounding_box(surface, tree)
+    bounding_box = calculate_bounding_box(surface, tree)
+    if is_valid_bounding_box(bounding_box):
+        # The referenced tree is drawn translated by the ``x`` and ``y``
+        # attributes of the ``use`` node
+        x = size(surface, node.get('x'), 'x')
+        y = size(surface, node.get('y'), 'y')
+        if x or y:
+            minx, miny, width, height = bounding_box
+            bounding_box = minx + x, miny + y, width, height
+    return bounding_box
+
+
+def transform_bounding_box(matrix, bounding_box):
+    """Get the bounding box of ``bounding_box`` transformed by ``matrix``.
+
+    Transform the four corners of the bounding box and return the
+    axis-aligned bounding box of the transformed corners.
+
+    """
+    minx, miny, width, height = bounding_box
+    maxx, maxy = minx + width, miny + height
+    points = (
+        matrix.transform_point(x, y)
+        for x, y in ((minx, miny), (maxx, miny), (minx, maxy), (maxx, maxy)))
+    return extend_bounding_box(EMPTY_BOUNDING_BOX, points)
 
 
 def extend_bounding_box(bounding_box, points):
