@@ -238,9 +238,11 @@ def draw_pattern(surface, node, name, opacity):
         pattern_width = size(surface, pattern_node.get('width', 0), 1)
         pattern_height = size(surface, pattern_node.get('height', 0), 1)
     else:
-        _, _, width, height = calculate_bounding_box(surface, node)
-        x = size(surface, pattern_node.get('x'), 1) * width
-        y = size(surface, pattern_node.get('y'), 1) * height
+        bbox_x, bbox_y, width, height = calculate_bounding_box(surface, node)
+        # The tile origin is relative to the object bounding box, keep its
+        # own origin so that the pattern is anchored on the painted element
+        x = bbox_x + size(surface, pattern_node.get('x'), 1) * width
+        y = bbox_y + size(surface, pattern_node.get('y'), 1) * height
         pattern_width = (
             size(surface, pattern_node.pop('width', '1'), 1) * width)
         pattern_height = (
@@ -256,7 +258,8 @@ def draw_pattern(surface, node, name, opacity):
         return False
 
     from .surface import SVGSurface  # circular import
-    pattern_surface = SVGSurface(pattern_node, None, surface.dpi, surface)
+    pattern_surface = SVGSurface(
+        pattern_node, None, surface.dpi, surface, is_pattern_tile=True)
     pattern_pattern = cairo.SurfacePattern(pattern_surface.cairo)
     pattern_pattern.set_extend(cairo.EXTEND_REPEAT)
     pattern_pattern.set_matrix(cairo.Matrix(

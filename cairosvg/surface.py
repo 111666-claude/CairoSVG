@@ -146,7 +146,8 @@ class Surface(object):
     def __init__(self, tree, output, dpi, parent_surface=None,
                  parent_width=None, parent_height=None,
                  scale=1, output_width=None, output_height=None,
-                 background_color=None, map_rgba=None, map_image=None):
+                 background_color=None, map_rgba=None, map_image=None,
+                 is_pattern_tile=False):
         """Create the surface from a filename or a file-like object.
 
         The rendered content is written to ``output`` which can be a filename,
@@ -227,6 +228,7 @@ class Surface(object):
 
         self.map_rgba = map_rgba
         self.map_image = map_image
+        self.is_pattern_tile = is_pattern_tile
         self.draw(tree)
 
     @property
