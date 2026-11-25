@@ -162,6 +162,13 @@ class Node(dict):
 
         self.root = False
 
+        # Whether a font size is declared directly on this element
+        # (presentation attribute, inline style or matched CSS rule), as
+        # opposed to being copied from a parent by attribute inheritance.
+        # ``font_size_is_inherit`` marks an explicit ``font-size: inherit``.
+        self.font_size_declared = False
+        self.font_size_is_inherit = False
+
         node = element.etree_element
         self.element = element
         self.style = style
@@ -189,6 +196,11 @@ class Node(dict):
 
         self.update(self.xml_tree.attrib)
 
+        # The ``font`` shorthand also sets the font size when expanded.
+        if ('font-size' in self.xml_tree.attrib or
+                'font' in self.xml_tree.attrib):
+            self.font_size_declared = True
+
         # Apply CSS rules
         style_attr = node.get('style')
         if style_attr:
@@ -204,6 +216,8 @@ class Node(dict):
             for declarations in declaration_lists:
                 for name, value in declarations:
                     self[name] = value.strip()
+                    if name in ('font-size', 'font'):
+                        self.font_size_declared = True
 
         # Replace currentColor by a real color value
         for attribute in COLOR_ATTRIBUTES:
@@ -214,6 +228,10 @@ class Node(dict):
         for attribute in [
                 attribute for attribute in self
                 if self[attribute] == 'inherit']:
+            # An explicit "inherit" font size must use the parent's
+            # *computed* size, not re-resolve the parent's raw em token.
+            if attribute in ('font-size', 'font'):
+                self.font_size_is_inherit = True
             if parent is not None and attribute in parent:
                 self[attribute] = parent.get(attribute)
             else:

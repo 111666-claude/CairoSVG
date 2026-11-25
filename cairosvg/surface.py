@@ -311,7 +311,18 @@ class Surface(object):
                 if att not in node:
                     node[att] = font[att]
 
-        self.font_size = size(self, node.get('font-size', '12pt'))
+        # ``font-size`` is inherited as a computed length, so relative
+        # units (em/ex/ch) are resolved only for the element that actually
+        # declares the size, against the parent's computed size stored in
+        # ``old_font_size``. Descendants that merely inherited the raw
+        # value copied by the parser keep ``old_font_size``: re-resolving
+        # it would magnify the font at every nested or anonymous tspan.
+        if getattr(node, 'font_size_is_inherit', False):
+            self.font_size = old_font_size
+        elif getattr(node, 'font_size_declared', False):
+            self.font_size = size(self, node.get('font-size', '12pt'))
+        else:
+            self.font_size = old_font_size
         self.context.save()
 
         # Apply transformations
