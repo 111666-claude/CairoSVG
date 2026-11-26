@@ -3,6 +3,16 @@
 ======
 
 
+Future version
+==============
+
+* Support CSS ``@font-face`` rules referencing TTF/OTF fonts. The font files
+  are fetched with the same URL fetcher as other resources, so the security
+  policy (``unsafe`` or a custom ``url_fetcher``) is never bypassed. Fonts are
+  registered for the conversion only; documents without a matching rule keep
+  using the system fonts.
+
+
 Version 2.9.0 released on 2026-03-13
 ====================================
 

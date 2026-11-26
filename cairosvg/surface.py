@@ -13,6 +13,7 @@ from .defs import (
     apply_filter_after_painting, apply_filter_before_painting, clip_path,
     filter_, gradient_or_pattern, linear_gradient, marker, mask, paint_mask,
     parse_all_defs, pattern, prepare_filter, radial_gradient, use)
+from .fonts import FontLibrary
 from .helpers import (
     UNITS, PointError, clip_rect, node_format, normalize, paint,
     preserve_ratio, size, transform)
@@ -162,6 +163,7 @@ class Surface(object):
         self.cursor_position = [0, 0]
         self.cursor_d_position = [0, 0]
         self.text_path_width = 0
+        self._owns_fonts = parent_surface is None
         self.tree_cache = {(tree.url, tree.get('id')): tree}
         self.reference_count = 0
         if parent_surface:
@@ -172,6 +174,8 @@ class Surface(object):
             self.paths = parent_surface.paths
             self.filters = parent_surface.filters
             self.images = parent_surface.images
+            # Nested documents share the fonts of their parent conversion.
+            self.fonts = parent_surface.fonts
         else:
             self.markers = {}
             self.gradients = {}
@@ -180,6 +184,9 @@ class Surface(object):
             self.paths = {}
             self.filters = {}
             self.images = {}
+            # @font-face rules of this document, scoped to this conversion
+            # and discarded in finish().
+            self.fonts = FontLibrary(tree)
         self._old_parent_node = self.parent_node = None
         self.output = output
         self.dpi = dpi
@@ -277,6 +284,12 @@ class Surface(object):
     def finish(self):
         """Read the surface content."""
         self.cairo.finish()
+        if self._owns_fonts:
+            # Drop the document-specific @font-face rules and URL results so
+            # that nothing about this conversion leaks to the next one. Font
+            # bytes stay in the process-level cache, as cairo may still read
+            # them through its FreeType scaled-font cache.
+            self.fonts.cleanup()
 
     def map_color(self, string, opacity=1):
         """Parse a color ``string`` and apply ``map_rgba`` function to it."""

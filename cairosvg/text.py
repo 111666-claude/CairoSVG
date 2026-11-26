@@ -63,7 +63,16 @@ def text(surface, node, draw_as_text=False):
     font_weight = getattr(
         cairo, (f'font_weight_{node_font_weight}'.upper()),
         cairo.FONT_WEIGHT_NORMAL)
-    surface.context.select_font_face(font_family, font_style, font_weight)
+    # Use a font declared with an @font-face rule when the requested family
+    # matches one. A missing or unloadable font returns None and the text is
+    # rendered with the system fonts, as it was before @font-face support.
+    font_face = surface.fonts.get_font_face(
+        node, font_family, font_style, font_weight)
+    if font_face is not None:
+        surface.context.set_font_face(font_face)
+    else:
+        surface.context.select_font_face(
+            font_family, font_style, font_weight)
     surface.context.set_font_size(surface.font_size)
     ascent, descent, _, max_x_advance, max_y_advance = (
         surface.context.font_extents())
